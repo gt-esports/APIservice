@@ -1,5 +1,6 @@
 fastapi
 starlette
-uvicorn
 pytest
 httpx
+PyJWT
+uvicorn[standard]
