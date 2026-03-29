@@ -1,2 +1,0 @@
-# GT Esports
-# First Commit
