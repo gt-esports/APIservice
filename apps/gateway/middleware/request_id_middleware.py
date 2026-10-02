@@ -1,18 +1,24 @@
-import uuid
-from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
+from uuid import uuid4
+
 from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-class RequestIDMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        requestID = str(uuid.uuid4())
 
-        request.state.request_id = requestID
+class RequestIDMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
 
-        headers = MutableHeaders(scope=request.scope)
-        headers["X-Request-ID"] = requestID
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        response = await call_next(request)
-        response.headers["X-Request-ID"] = requestID
+        request_id = str(uuid4())
+        scope.setdefault("state", {})["request_id"] = request_id
 
-        return response
+        async def send_with_request_id(message: Message):
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)["X-Request-ID"] = request_id
+            await send(message)
+
+        await self.app(scope, receive, send_with_request_id)
