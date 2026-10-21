@@ -1,83 +1,93 @@
-import pytest
-import jwt
 import time
+
+import jwt
+import pytest
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from fastapi import Request
-from jwtMiddleware import app, DevSecret, ALGORITHM
+
+from apps.auth.config import JWTSettings
+from apps.auth.services.auth_service import create_access_token
+from apps.gateway.middleware.jwt_middleware import JWTMiddleware
+from apps.gateway.middleware.request_id_middleware import RequestIDMiddleware
+
+SETTINGS = JWTSettings(secret="test-only-secret-at-least-32-characters")
 
 
-# Dummy route for testing
-@app.get("/test")
-async def protected_route(request: Request):
-    return {"message": "success", "user": request.state.user}
+@pytest.fixture
+def client():
+    app = FastAPI()
+    app.add_middleware(JWTMiddleware, settings=SETTINGS)
+    app.add_middleware(RequestIDMiddleware)
 
-client = TestClient(app)
+    @app.get("/protected")
+    async def protected(request: Request):
+        return {"user": request.state.user}
 
-# Helpers
-def generate_token(payload, secret=DevSecret, algo=ALGORITHM):
-    return jwt.encode(payload, secret, algorithm=algo)
+    @app.get("/health")
+    async def health():
+        return {"status": "ok"}
 
-# Tests
-def test_no_auth_header():
-    """Request without header returns 401"""
-    response = client.get("/test")
+    @app.get("/health/private")
+    async def health_private():
+        return {"sensitive": True}
+
+    return TestClient(app)
+
+
+def valid_claims():
+    return {
+        "sub": "test-user",
+        "exp": int(time.time()) + 3600,
+        "iss": SETTINGS.issuer,
+        "aud": SETTINGS.audience,
+    }
+
+
+def assert_unauthorized(response):
     assert response.status_code == 401
-    assert response.json() == {"error": "Missing or invalid Authorization header"}
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+    assert response.json() == {
+        "error": {
+            "code": "unauthorized",
+            "message": "A valid Bearer token is required",
+            "request_id": response.headers["X-Request-ID"],
+        }
+    }
 
-def test_invalid_authorization_header_scheme():
-    """A header that's not bearer gets 404"""
-    response = client.get("/test", headers={"Authorization": "Basic user:pass"})
-    assert response.status_code == 401
-    assert response.json() == {"error": "Missing or invalid Authorization header"}
 
-def test_malformed_token():
-    """Non decodable string for token"""
-    response = client.get("/test", headers={"Authorization": "Bearer vhjefohjvofd.wss.s"})
-    assert response.status_code == 401
-    assert response.json() == {"error": "Error Decoding Authorization Token"}
+@pytest.mark.parametrize("header", ["", "Basic user:pass", "Bearer", "Bearer bad.token", "Bearer "])
+def test_invalid_authorization(client, header):
+    assert_unauthorized(client.get("/protected", headers={"Authorization": header}))
 
-def test_missing_exp_claim():
-    """Token without exp"""
-    token = generate_token({"sub": "user123"})
-    response = client.get("/test", headers={"Authorization": f"Bearer {token}"})
-    
-    assert response.status_code == 401
-    assert "exp" in response.json()["error"]
 
-def test_missing_sub_claim():
-    """Token without sub"""
-    token = generate_token({"exp": time.time() + 3600})
-    response = client.get("/test", headers={"Authorization": f"Bearer {token}"})
-    
-    assert response.status_code == 401
-    assert "sub" in response.json()["error"]
+@pytest.mark.parametrize("claim", ["exp", "sub", "iss", "aud"])
+def test_required_claims(client, claim):
+    payload = valid_claims()
+    payload.pop(claim)
+    token = jwt.encode(payload, SETTINGS.secret, algorithm="HS256")
+    assert_unauthorized(client.get("/protected", headers={"Authorization": f"Bearer {token}"}))
 
-def test_expired_token():
-    """Token that expired"""
-    payload = {"sub": "user123", "exp": time.time() - 20}
-    token = generate_token(payload)
-    response = client.get("/test", headers={"Authorization": f"Bearer {token}"})
-    
-    assert response.status_code == 401
-    assert response.json() == {"error": "Expired Authorization Token Signature"}
 
-def test_invalid_signature():
-    """Wrong secret key"""
-    payload = {"sub": "user123", "exp": time.time() + 3600}
+@pytest.mark.parametrize(
+    "change", [{"exp": 1}, {"iss": "wrong-issuer"}, {"aud": "wrong-audience"}]
+)
+def test_expiration_issuer_and_audience_enforced(client, change):
+    token = jwt.encode(valid_claims() | change, SETTINGS.secret, algorithm="HS256")
+    assert_unauthorized(client.get("/protected", headers={"Authorization": f"Bearer {token}"}))
 
-    token = generate_token(payload, secret="invalidsecret")
-    response = client.get("/test", headers={"Authorization": f"Bearer {token}"})
-    
-    assert response.status_code == 401
-    assert response.json() == {"error": "Invalid Authorization Token Signature"}
 
-def test_valid_token():
-    """Valid token request passes"""
-    payload = {"sub": "valid_user", "exp": time.time() + 3600}
-    token = generate_token(payload)
-    response = client.get("/test", headers={"Authorization": f"Bearer {token}"})
-    
+def test_signature_required(client):
+    token = jwt.encode(valid_claims(), "another-secret-at-least-32-characters", algorithm="HS256")
+    assert_unauthorized(client.get("/protected", headers={"Authorization": f"Bearer {token}"}))
+
+
+def test_issuer_token_accepted_by_verifier(client):
+    token = create_access_token("test-user", "user", SETTINGS)
+    response = client.get("/protected", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
-    data = response.json()
-    assert data["message"] == "success"
-    assert data["user"]["sub"] == "valid_user"
+    assert response.json()["user"]["sub"] == "test-user"
+
+
+def test_only_exact_health_path_is_exempt(client):
+    assert client.get("/health").status_code == 200
+    assert_unauthorized(client.get("/health/private"))

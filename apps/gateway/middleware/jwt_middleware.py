@@ -1,67 +1,50 @@
-import time
 import jwt
-from fastapi import FastAPI, Request, HTTPException, status
-from fastapi.responses import JSONResponse
+from starlette.requests import Request
+from starlette.types import ASGIApp, Receive, Scope, Send
 
-app = FastAPI()
+from apps.auth.config import JWTSettings
+from apps.gateway.utils.response_utils import error_response
 
-DevSecret = "herro123"
-ALGORITHM = "HS256"
-ISSUER = "Joey"
-AUDIENCE = "Joey's ppl"
 
-@app.middleware("http")
-async def jwt_middleware_header(request: Request, call_next):
-    auth_header = request.headers.get("Authorization")
+class JWTMiddleware:
+    def __init__(
+        self,
+        app: ASGIApp,
+        settings: JWTSettings,
+        exempt_paths: tuple[str, ...] = ("/health", "/ready", "/docs", "/openapi.json"),
+    ):
+        self.app = app
+        self.settings = settings
+        self.exempt_paths = frozenset(exempt_paths)
 
-    if not auth_header or not auth_header.startswith("Bearer "):
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Missing or invalid Authorization header"}
-        )
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http" or scope["path"] in self.exempt_paths:
+            await self.app(scope, receive, send)
+            return
 
-    token = auth_header.split(" ")[-1]
+        request = Request(scope)
+        scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+        try:
+            if scheme.lower() != "bearer" or not token:
+                raise jwt.InvalidTokenError()
+            user = jwt.decode(
+                token,
+                self.settings.secret,
+                algorithms=[self.settings.algorithm],
+                issuer=self.settings.issuer,
+                audience=self.settings.audience,
+                options={"require": ["exp", "sub", "iss", "aud"]},
+            )
+        except jwt.InvalidTokenError:
+            response = error_response(
+                request,
+                401,
+                "unauthorized",
+                "A valid Bearer token is required",
+                {"WWW-Authenticate": "Bearer"},
+            )
+            await response(scope, receive, send)
+            return
 
-    try:
-        user_data = jwt.decode(
-            token, 
-            DevSecret, 
-            algorithms=[ALGORITHM], 
-            options={"require": ["exp", "sub", "iss", "aud"]}
-        )
-
-        if user_data.get("iss") != ISSUER:
-            return JSONResponse(status_code=401, content={"error": "Invalid token issuer"})
-        if user_data.get("aud") != AUDIENCE:
-            return JSONResponse(status_code=401, content={"error": "Invalid token audience"})
-        
-    except jwt.MissingRequiredClaimError as e:
-        return JSONResponse(
-            status_code=401,
-            content={"error": str(e)}
-        )
-    except jwt.ExpiredSignatureError:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Expired Authorization Token Signature"}
-        )
-    except jwt.InvalidSignatureError:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Invalid Authorization Token Signature"}
-        )
-    except jwt.DecodeError:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Error Decoding Authorization Token"}
-        )
-    except jwt.InvalidTokenError: # The catch-all 
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Invalid Authorization Token"}
-        )
-    
-    request.state.user = user_data
-    response = await call_next(request)
-    
-    return response
+        request.state.user = user
+        await self.app(scope, receive, send)

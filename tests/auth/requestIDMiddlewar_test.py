@@ -1,45 +1,24 @@
 import uuid
-from fastapi import FastAPI
+
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from requestIDMiddleware import RequestIDMiddleware
+
+from apps.gateway.middleware.request_id_middleware import RequestIDMiddleware
 
 
-app = FastAPI()
-app.add_middleware(RequestIDMiddleware)
+def test_generated_request_id_matches_state_and_is_unique():
+    app = FastAPI()
+    app.add_middleware(RequestIDMiddleware)
 
-@app.get("/test")
-def example():
-    return {"message": "ok"}
+    @app.get("/test")
+    async def example(request: Request):
+        return {"request_id": request.state.request_id}
 
-
-client = TestClient(app)
-
-
-def testRequestIDHeaderIsMade():
-    response = client.get("/test")
-
-    assert response.status_code == 200
-    assert "X-Request-ID" in response.headers
-
-
-def testRequestIDIsValid():
-    response = client.get("/test")
-    request_id = response.headers["X-Request-ID"]
-
-    uuid.UUID(request_id)
-
-
-def testRequestIDIsUnique():
-    response1 = client.get("/test")
-    response2 = client.get("/test")
-
-    ID1 = response1.headers["X-Request-ID"]
-    ID2 = response2.headers["X-Request-ID"]
-
-    assert ID1 != ID2
-
-
-def testRequestIDInHeader():
-    response = client.get("/test")
-
-    assert response.headers["X-Request-ID"] is not None
+    client = TestClient(app)
+    first = client.get("/test", headers={"X-Request-ID": "untrusted-client-value"})
+    second = client.get("/test")
+    first_id = first.headers["X-Request-ID"]
+    assert str(uuid.UUID(first_id)) == first_id
+    assert first.json()["request_id"] == first_id
+    assert first_id != second.headers["X-Request-ID"]
+    assert first_id != "untrusted-client-value"

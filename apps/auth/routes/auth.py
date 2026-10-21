@@ -1,33 +1,22 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-from datetime import datetime, timedelta
-import jwt
-app = FastAPI()
+from fastapi import APIRouter
+from pydantic import BaseModel, ConfigDict, Field
 
-DevSecret = "herro123"
-ALGORITHM = "HS256"
-ISSUER = "Joey" # os.getenv("JWT_ISSUER", "auth-service")
-AUDIENCE = "Joey's ppl" #os.getenv("JWT_AUDIENCE", "gamefest-service")
+from apps.auth.config import JWTSettings
+from apps.auth.services.auth_service import create_access_token
+
 
 class LoginRequest(BaseModel):
-    username: str
-    role: str | None = None
+    model_config = ConfigDict(str_strip_whitespace=True)
 
-def createAccessToken(username: str, role: str | None) -> str:
-    time = datetime.now()
-    payload = {
-        "sub": username,
-        "role": role or "user",
-        "iat": int(time.timestamp()),
-        "exp": int((time + timedelta(hours=1)).timestamp()),
-        "iss": ISSUER,
-        "aud": AUDIENCE
-
-    }
-    return jwt.encode(payload, DevSecret, algorithm = ALGORITHM)
+    username: str = Field(min_length=1, max_length=100)
+    role: str = Field(default="user", min_length=1, max_length=100)
 
 
-@app.post("/login")
-def login(loginRequest: LoginRequest):
-    accessToken = createAccessToken(loginRequest.username, loginRequest.role)
-    return {"accessToken": accessToken}
+def create_dev_router(settings: JWTSettings) -> APIRouter:
+    router = APIRouter()
+
+    @router.post("/login", summary="Development-only token issuer; no identity verification")
+    async def login(body: LoginRequest):
+        return {"accessToken": create_access_token(body.username, body.role, settings)}
+
+    return router

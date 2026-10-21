@@ -1,39 +1,52 @@
-import time
-import uuid
 import json
 import logging
-from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
+from time import perf_counter
+
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 logger = logging.getLogger("gateway")
-logging.basicConfig(level=logging.INFO)
 
-class LoggingMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        request_id = str(uuid.uuid4())
-        start_time = time.time()
 
-        user_id = None
+def configure_logging() -> None:
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        logger.addHandler(logging.StreamHandler())
 
-        if hasattr(request.state, "user_id"):
-            user_id = request.state.user_id
 
-        response = await call_next(request)
+class LoggingMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
 
-        latency = (time.time() - start_time) * 1000
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-        log_data = {
-            # add "user_id" from JWT once auth middleware exists
-            "request_id": request_id,
-            "route": request.url.path,
-            "method": request.method,
-            "status_code": response.status_code,
-            "latency_ms": round(latency, 2),
-            "user_id": user_id
-        }
+        started = perf_counter()
+        status_code = 500
+        error_type = None
 
-        logger.info(json.dumps(log_data))
+        async def record_status(message: Message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
 
-        response.headers["X-Request-ID"] = request_id
-
-        return response
+        try:
+            await self.app(scope, receive, record_status)
+        except Exception as exc:
+            error_type = type(exc).__name__
+            raise
+        finally:
+            error_type = error_type or scope.get("state", {}).get("error_type")
+            log_data = {
+                "request_id": scope.get("state", {}).get("request_id"),
+                "route": scope["path"],
+                "method": scope["method"],
+                "status_code": status_code,
+                "latency_ms": round((perf_counter() - started) * 1000, 2),
+            }
+            if error_type:
+                log_data["error_type"] = error_type
+            level = logging.ERROR if status_code >= 500 or error_type else logging.INFO
+            logger.log(level, json.dumps(log_data))
