@@ -9,6 +9,8 @@ logger = logging.getLogger("gateway")
 
 def configure_logging() -> None:
     logger.setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     if not logger.handlers:
         logger.addHandler(logging.StreamHandler())
 
@@ -41,7 +43,7 @@ class LoggingMiddleware:
             error_type = error_type or scope.get("state", {}).get("error_type")
             log_data = {
                 "request_id": scope.get("state", {}).get("request_id"),
-                "route": scope["path"],
+                "route": getattr(scope.get("route"), "path", "<unmatched>"),
                 "method": scope["method"],
                 "status_code": status_code,
                 "latency_ms": round((perf_counter() - started) * 1000, 2),

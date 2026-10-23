@@ -5,6 +5,12 @@ serves `GET /v1/gamefest/past-winners` from the existing GameFest Supabase proje
 using its anonymous public read permissions. It does not write to the database,
 change its schema, or replace existing website authentication.
 
+The main-site integration also provides `GET /v1/me` and administrator-only
+marketing contact APIs. Supabase continues to own accounts, sessions and data.
+Each private request verifies the existing user token with Supabase Auth and
+reads the current database role; contacts retain the caller's RLS permissions.
+See [the main-site contract and rollout checks](docs/main-site-api.md).
+
 ## Run locally
 
 Use Python 3.11 on macOS or Linux. From the repository root:
@@ -90,8 +96,8 @@ python -m uvicorn apps.auth.main:app --env-file infra/.env --host 127.0.0.1 --po
 
 Its `/login` still accepts a development username and role without checking
 identity. Never expose this demo publicly. JWT verification tests cover issuer,
-audience, expiry, signature and required claims. Real identity migration and
-authorization are outside this public-read milestone.
+audience, expiry, signature and required claims. This demo is independent of the
+main-site integration, which verifies real sessions through Supabase Auth.
 
 ## Architecture direction
 
@@ -105,5 +111,5 @@ database consolidation and rate limiting remain future work.
 
 Standalone GameFest/Hackathon `/hello` apps remain development stubs; they are
 not proxies behind the gateway. No claims of production rollout are implied by
-passing local tests. Use a feature branch and PR; the paired GameFest repository
-also requires `@longxiangchen` review before merge.
+passing local tests. Use a feature branch and PR; the paired main-site and
+GameFest repositories also require `@longxiangchen` review before merge.
