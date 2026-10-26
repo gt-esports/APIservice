@@ -5,6 +5,17 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 
+class APIError(HTTPException):
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        headers: dict[str, str] | None = None,
+    ):
+        super().__init__(status_code, detail={"code": code, "message": message}, headers=headers)
+
+
 def error_response(
     request: Request,
     status_code: int,
