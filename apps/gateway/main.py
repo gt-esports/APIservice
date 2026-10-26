@@ -11,6 +11,7 @@ from apps.main_site.identity import router as identity_router
 from apps.main_site.middleware import PrivateResponseMiddleware
 from apps.main_site.body_limit import ContactBodyLimitMiddleware
 from apps.main_site.contacts import router as contacts_router
+from apps.main_site.readiness import router as main_site_readiness_router
 
 
 def create_app() -> FastAPI:
@@ -20,6 +21,7 @@ def create_app() -> FastAPI:
     app.include_router(gamefest_router, prefix="/v1/gamefest")
     app.include_router(identity_router, prefix="/v1")
     app.include_router(contacts_router)
+    app.include_router(main_site_readiness_router)
 
     @app.get("/health", tags=["Operations"])
     async def health():

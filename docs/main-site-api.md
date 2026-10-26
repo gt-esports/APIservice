@@ -36,8 +36,11 @@ key. Existing `auth.uid()` and `is_admin()` RLS checks remain active, including
 at mutation time if permissions change between API authorization and SQL.
 Anonymous users and members cannot access contacts. `/v1/me` is available to
 any authenticated member. Main-site profiles, roles and contacts must already
-have the migrations and RLS policies from the main-site repository applied.
-This PR does not apply migrations or alter any database policies.
+have the reviewed migrations and RLS policies from the main-site repository
+applied, including the explicit authenticated profile-read grant in
+`20261026000100_grant_profile_reads.sql`. Deployment prerequisites and the
+read-only smoke tool are in [the deployment runbook](deployment.md).
+API startup does not apply migrations or alter database policies.
 
 Private responses, including errors, carry `Cache-Control: no-store`.
 Errors use the gateway's `{error: {code, message, request_id}}` envelope.
@@ -52,6 +55,7 @@ All endpoints below require `Authorization: Bearer <Supabase access token>`.
 | Method and path | Input | Successful response |
 | --- | --- | --- |
 | `GET /v1/me` | None | `{user: {id, email}, profile: {id, full_name, created_at} \| null, role: "member" \| "admin"}` |
+| `GET /v1/main/ready` | Administrator session | `{service: "main-site", status: "ready"}` after live identity/role and bounded contact schema/read checks |
 | `GET /v1/main/marketing-contacts` | `offset` >= 0 (default 0), `limit` 1–500 (default 500) | `{contacts: [...], next_offset: number \| null}` |
 | `POST /v1/main/marketing-contacts` | Contact input | 201 and the saved contact |
 | `PATCH /v1/main/marketing-contacts/{id}` | All editable contact fields and positive integer `revision` | 200 and the saved contact with incremented revision |
@@ -106,7 +110,10 @@ may be unknown: refresh before retrying, rather than assuming nothing changed.
 
 1. Review and deploy the API PR first. Configure the main-site project and exact
    origins alongside the existing GameFest settings. Do not enable development
-   `/login`. `/health` tests liveness; the existing `/ready` checks GameFest only.
+   `/login`. `/health` tests liveness; `/ready` checks GameFest only.
+   `/v1/main/ready` checks administrator identity/role and contact read readiness;
+   it returns no private contact or identity values. Run the read-only staging
+   smoke command in the deployment runbook before frontend rollout.
 2. In a controlled staging environment, verify `/v1/me` and contact operations
    with an existing test administrator and a member. Confirm anonymous/member
    denial, revocation on the next request, stale revision conflicts, duplicate
@@ -123,8 +130,14 @@ may be unknown: refresh before retrying, rather than assuming nothing changed.
 Run `python -m pytest -q` for offline tests. Mocked upstream tests verify the
 HTTP contract, identity/role checks, caller context, validation, errors, no-store,
 and bounded queries/mutations. They do not prove production configuration or
-execute the database policies. The main-site repository's SQL permission tests
-should also be run against a disposable Supabase database before deployment.
+execute the database policies. The opt-in
+[database integration suite](../tests/integration/README.md) applies the paired
+main-site migrations and SQL permission tests to disposable local GoTrue,
+PostgREST, and PostgreSQL services. It verifies real sessions, current-role
+revocation, direct database RLS, optimistic concurrency, capped pagination,
+duplicate import counts, opt-out preservation, and atomic import rollback.
+Hosted API-key enforcement, CORS, OAuth, and real-account behavior still need
+the staging checks above.
 
 References: [Supabase JWT verification](https://supabase.com/docs/guides/auth/jwts),
 [PostgREST pagination](https://docs.postgrest.org/en/stable/references/api/pagination_count.html),
