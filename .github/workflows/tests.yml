@@ -11,11 +11,42 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
           cache: pip
       - run: python -m pip install -r requirements.txt
       - run: python -m pytest -q
+
+  database-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Paired main-site schema; update both checkout and verification together.
+      MAIN_SITE_SCHEMA_COMMIT: 3c66231a4d1cb3f43f964ab0b1842119e5667966
+      MAIN_SITE_SCHEMA_DIR: ${{ github.workspace }}/.integration-main-site/supabase
+      RUN_MAIN_SITE_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: gt-esports/gtesports-website
+          ref: ${{ env.MAIN_SITE_SCHEMA_COMMIT }}
+          path: .integration-main-site
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements.txt
+      - name: Build the deployment container
+        run: docker build --file infra/Dockerfile --tag gt-esports-api:ci .
+      - name: Exercise real Auth, REST, and database policies
+        run: python -m pytest tests/integration/test_database.py -q

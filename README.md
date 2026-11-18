@@ -5,12 +5,19 @@ serves `GET /v1/gamefest/past-winners` from the existing GameFest Supabase proje
 using its anonymous public read permissions. It does not write to the database,
 change its schema, or replace existing website authentication.
 
+The main-site integration also provides `GET /v1/me` and administrator-only
+marketing contact APIs. Supabase continues to own accounts, sessions and data.
+Each private request verifies the existing user token with Supabase Auth and
+reads the current database role; contacts retain the caller's RLS permissions.
+See [the main-site contract and rollout checks](docs/main-site-api.md) and
+[the Vercel/container deployment runbook](docs/deployment.md).
+
 ## Run locally
 
-Use Python 3.11 on macOS or Linux. From the repository root:
+Use Python 3.12 on macOS or Linux. From the repository root:
 
 ```sh
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 cp infra/.env.example infra/.env
@@ -24,12 +31,13 @@ HTTPS is required for remote Supabase hosts; HTTP is allowed only for loopback
 addresses used in local development.
 
 ```sh
-python -m uvicorn apps.gateway.main:app --reload --env-file infra/.env --host 127.0.0.1 --port 8000
+python -m uvicorn app:app --reload --env-file infra/.env --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
 - OpenAPI UI: <http://localhost:8000/docs>
 - Liveness: `GET /health` (no external dependency)
-- Readiness: `GET /ready` (checks the actual public data query, returns 503 on failure)
+- GameFest readiness: `GET /ready` (checks the actual public data query, returns 503 on failure)
+- Main-site readiness: `GET /v1/main/ready` (live administrator identity/role and contact schema/read check)
 - Public results: `GET /v1/gamefest/past-winners`
 
 ```sh
@@ -37,9 +45,12 @@ curl -i http://localhost:8000/v1/gamefest/past-winners
 python -m pytest -q
 ```
 
-Tests use synthetic fixtures and an HTTP mock transport; no credentials or live
-database are required. GitHub Actions runs the same suite for PRs and main.
-The pinned requirements record the Python 3.11 environment used for this feature.
+The default suite uses synthetic fixtures and an HTTP mock transport; no
+credentials or live database are required. Python 3.12 is the deployment
+target; GitHub Actions also covers Python 3.11 for compatibility. A separate
+[disposable database integration suite](tests/integration/README.md) exercises
+real GoTrue sessions, PostgREST, and PostgreSQL RLS against the paired main-site
+migrations. It requires local Docker, never a hosted Supabase project.
 
 ## Connect GameFest
 
@@ -74,8 +85,10 @@ docker compose -f infra/docker-compose.yml up --build
 
 This runs the gateway and domain router in one container on `127.0.0.1:8000`.
 The image runs as a non-root user and does not contain environment files.
-The Docker recipe is provided for deployment preparation; CI validates the
-Python application, not the container runtime.
+The root `app.py` exports the same application for Uvicorn and Vercel.
+See [the deployment runbook](docs/deployment.md) for exact-origin CORS,
+main-site migration prerequisites, and the read-only smoke command. Cloud
+configuration and deployment verification are separate from local tests.
 
 ## Development auth demo
 
@@ -90,8 +103,8 @@ python -m uvicorn apps.auth.main:app --env-file infra/.env --host 127.0.0.1 --po
 
 Its `/login` still accepts a development username and role without checking
 identity. Never expose this demo publicly. JWT verification tests cover issuer,
-audience, expiry, signature and required claims. Real identity migration and
-authorization are outside this public-read milestone.
+audience, expiry, signature and required claims. This demo is independent of the
+main-site integration, which verifies real sessions through Supabase Auth.
 
 ## Architecture direction
 
@@ -105,5 +118,5 @@ database consolidation and rate limiting remain future work.
 
 Standalone GameFest/Hackathon `/hello` apps remain development stubs; they are
 not proxies behind the gateway. No claims of production rollout are implied by
-passing local tests. Use a feature branch and PR; the paired GameFest repository
-also requires `@longxiangchen` review before merge.
+passing local tests. Use a feature branch and PR; the paired main-site and
+GameFest repositories also require `@longxiangchen` review before merge.

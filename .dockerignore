@@ -5,3 +5,4 @@ infra/.env*
 **/__pycache__
 .pytest_cache
 tests
+.integration-main-site
